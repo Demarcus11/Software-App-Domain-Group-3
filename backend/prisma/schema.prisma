@@ -1,0 +1,136 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ACCOUNTANT 
+  MANAGER 
+  ADMIN
+}
+
+enum RequestStatus {
+  PENDING 
+  APPROVED 
+  REJECTED
+}
+
+model User {
+  id        Int @id @default(autoincrement())
+  email     String @unique
+  username  String @db.VarChar(30) @unique
+  password  String
+  role      Role   @default(ACCOUNTANT)
+  passwordResetToken String? 
+  passwordResetTokenExpiry DateTime?
+  firstName String
+  lastName String
+  profilePicture String?
+  isActive Boolean @default(true)
+  isSuspended Boolean @default(false)
+  suspensionStart DateTime?
+  suspensionEnd DateTime?
+  passwordExpiresAt DateTime
+  failedLoginAttempts Int @default(0)
+  lastLoginAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  securityQuestions SecurityQuestion[]
+  passwordHistory PasswordHistory[]
+  accessRequests AccessRequest[]
+}
+
+model SecurityQuestion {
+  id Int @id @default(autoincrement())
+  userId Int @unique
+  question String
+  answer String
+  user User @relation(fields: [userId], references: [id])
+}
+
+model PasswordHistory {
+  id Int @id @default(autoincrement())
+  userId Int 
+  oldPassword String 
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id]) 
+}
+
+model AccessRequest {
+  id Int @id @default(autoincrement())
+  firstName String  
+  lastName String 
+  email String 
+  address String 
+  dateOfBirth DateTime 
+  status RequestStatus @default(PENDING)
+  createdAt DateTime @default(now())
+
+  userId Int?
+  user User? @relation(fields: [userId], references: [id])
+}
+
+/*
+
+DB Schema:
+
+User:
+
+Login in (Req 5 & 6):
+- email, username, password: used for login
+- profilePicture: stores URL to user's picture
+- lastLoginAt: to help with login attempts
+
+Roles and Permissions (Req 1, 2, 3):
+- role
+
+Account activation and deactivation (Req 4, 17):
+- isActive: to check if user is enabled or disabled
+- isSuspended, suspensionStart, suspensionEnd: to help with login attempts
+
+Security measures (Req 10, 11, 12, 13):
+- passwordResetToken, passwordResetTokenExpiry: for password reset functionality
+- passwordExpiresAt: to help with password expiration
+- failedLoginAttempts: to help with login attempts
+- passwordHistory: to store old passwords
+
+Relations:
+- securityQuestions: One-to-many relation with SecurityQuestion to store security questions and answers for password recovery
+- passwordHistory: One-to-many relation with PasswordHistory to track old passwords
+- accessRequests: One-to-many relation with AccessRequest for tracking new user access requests
+
+SecurityQuestion: 
+
+Forgot password functionality (Req 9):
+- question, answer
+- userId: to link each question to a user
+
+PasswordHistory:
+
+Password security (Req 11, 12):
+
+- oldPassword: stores previously used passwords
+- createdAt: stores when each password was created
+- userId: to link password to each user
+
+AccessRequest:
+
+User registration (Req 8):
+
+- firstName, lastName, email, address, dateOfBirth: to store user information
+- status: to track the status of the access request
+- createdAt: to store when the request was created
+- userId: to link each request to a user
+
+*/
