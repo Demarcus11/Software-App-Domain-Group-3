@@ -8,5 +8,7 @@ userAuthRouter.post("/register", userAuthController.asyncRegisterUser);
 userAuthRouter.post("/login", userAuthController.asyncLoginUser);
 userAuthRouter.post("/forgot-password", userAuthController.asyncForgotPassword);
 userAuthRouter.post("/reset-password", userAuthController.asyncResetPassword);
+userAuthRouter.get("/approve-user/:id", userAuthController.asyncApproveUser);
+userAuthRouter.get("/reject-user/:id", userAuthController.asyncRejectUser);
 
 export default userAuthRouter;

@@ -12,7 +12,9 @@
   "license": "ISC",
   "dependencies": {
     "@prisma/client": "^6.2.1",
+    "bcryptjs": "^2.4.3",
     "express": "^4.21.2",
+    "nodemailer": "^6.9.16",
     "prisma": "^6.2.1"
   }
 }
