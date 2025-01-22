@@ -88,7 +88,7 @@ export const asyncRegisterUser = async (req, res, next) => {
   const user = users.find((user) => user.email === email);
 
   if (user) {
-    const err = new Error("Email already used");
+    const err = new Error("This email is already in use. Try another email.");
     err.status = 400;
     return next(err);
   }
@@ -208,7 +208,7 @@ export const asyncApproveUser = async (req, res, next) => {
   }
 
   if (user.isActive) {
-    res
+    return res
       .status(400)
       .send("Your account has already been approved, check your email");
   }
@@ -218,8 +218,7 @@ export const asyncApproveUser = async (req, res, next) => {
   );
 
   if (!accessRequest) {
-    res.status(400).send("Access request not found");
-    return;
+    return res.status(400).send("Access request not found");
   }
 
   accessRequest.status = "approved";
@@ -248,7 +247,57 @@ export const asyncApproveUser = async (req, res, next) => {
 };
 
 export const asyncRejectUser = async (req, res, next) => {
-  res.send("User rejected, email sent to user");
+  const { id } = req.params;
+
+  const user = users.find((user) => user.id === parseInt(id));
+
+  if (!user) {
+    const err = new Error("User not found");
+    err.status = 404;
+    return next(err);
+  }
+
+  if (user.isActive) {
+    return res
+      .status(400)
+      .send("Your account has already been approved, check your email");
+  }
+
+  const rejectedAccessRequest = user.accessRequests.find(
+    (request) =>
+      request.userId === parseInt(id) && request.status === "rejected"
+  );
+  if (rejectedAccessRequest) {
+    return res.status(400).send("Access request already rejected");
+  }
+
+  const accessRequest = user.accessRequests.find(
+    (request) => request.userId === parseInt(id) && request.status === "pending"
+  );
+
+  if (!accessRequest) {
+    return res.status(400).send("Access request not found");
+  }
+
+  accessRequest.status = "rejected";
+  user.isActive = false;
+
+  // FIXME: update login link to the frontend login page
+  const emailText = `
+  Your account has been rejected.
+  `;
+
+  try {
+    await asyncSendEmail({
+      to: user.email,
+      subject: "Account rejected",
+      text: emailText,
+    });
+  } catch (err) {
+    console.error(err);
+  }
+
+  return res.send("User rejected, email sent to user");
 };
 
 export default {
