@@ -1,5 +1,8 @@
 import bcrypt from "bcryptjs";
 import asyncSendEmail from "../utils/sendEmail.js";
+import generateJWT from "../utils/generateJWT.js";
+import generateUsername from "../utils/generateUsername.js";
+import getSuspensionMessage from "../utils/suspensionMessage.js";
 
 let users = [
   {
@@ -19,6 +22,7 @@ let users = [
       "https://www.gravatar.com/avatar/205e460b479e2e5b48aec07710c08d50?f=y",
     isActive: true,
     isSuspended: false,
+    loginAttempts: 0,
     suspensionStarts: null,
     suspensionEnds: null,
     passwordExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
@@ -62,10 +66,12 @@ let users = [
    @access    Public
 */
 export const asyncRegisterUser = async (req, res, next) => {
+  // TODO: Update links to https://software-app-domain-group-3.onrender.com
   /*
-  - user is put into the system
+  - new user is put into the system
   - email is sent to admin email: ksuappdomainmanager@gmail.com
-  - click link in email to approve or deny request
+  - admin clicks link in email to approve or deny request
+  - approve or reject function runs
   */
   const {
     email,
@@ -95,11 +101,7 @@ export const asyncRegisterUser = async (req, res, next) => {
 
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
-  const username = `${firstName.slice(0, 1)}${lastName.toLowerCase()}${(
-    new Date().getMonth() + 1
-  )
-    .toString()
-    .padStart(2, "0")}${new Date().getFullYear().toString().slice(-2)}`;
+  const username = generateUsername({ firstName, lastName });
 
   const nextAccessRequestId =
     users.reduce(
@@ -114,6 +116,7 @@ export const asyncRegisterUser = async (req, res, next) => {
     password: hashedPassword,
     role,
     profilePicture,
+    loginAttempts: 0,
     username,
     securityQuestions,
     accessRequests: [
@@ -133,8 +136,8 @@ export const asyncRegisterUser = async (req, res, next) => {
 
   users.push(newUser);
 
-  const approveLink = `http://localhost:5000/api/auth/approve-user/${id}`;
-  const rejectLink = `http://localhost:5000/api/auth/reject-user/${id}`;
+  const approveLink = `${process.env.BASE_URL}/api/auth/approve-user/${id}`;
+  const rejectLink = `${process.env.BASE_URL}/api/auth/reject-user/${id}`;
 
   // Send email to admin email: ksuappdomainproject@gmail.com
   const emailText = `
@@ -156,6 +159,7 @@ export const asyncRegisterUser = async (req, res, next) => {
     });
   } catch (error) {
     console.error(error);
+    return res.status(500).send("Error sending email");
   }
 
   res.status(200).json({
@@ -163,12 +167,78 @@ export const asyncRegisterUser = async (req, res, next) => {
   });
 };
 
-/* @desc      Authenticate a user 
+/* @desc      Login a user 
    @endpoint  POST /auth/login
    @access    Public
 */
 export const asyncLoginUser = async (req, res, next) => {
-  res.status(200).json({ msg: "Login User" });
+  /*
+  - user enters username and password
+  - server sends users data and generated token to the client
+  - client uses token to access protected routes
+  */
+  const { username, password } = req.body;
+
+  let user;
+
+  user = users.find((user) => user.username === username);
+
+  if (!user) {
+    const err = new Error("Account not found");
+    err.status = 404;
+    return next(err);
+  }
+
+  try {
+    if (user.isSuspended) {
+      const currentTime = new Date();
+      if (currentTime >= user.suspensionEnds) {
+        user.isSuspended = false;
+        user.suspensionStarts = null;
+        user.suspensionEnds = null;
+      } else {
+        const err = new Error(getSuspensionMessage(user.suspensionEnds));
+        err.status = 403;
+        return next(err);
+      }
+    }
+
+    if (!user.isActive) {
+      const err = new Error("This account is not active");
+      err.status = 403;
+      return next(err);
+    }
+
+    if (await bcrypt.compare(password, user.password)) {
+      user.loginAttempts = 0;
+      return res.status(200).json({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        profilePicture: user.profilePicture,
+        token: generateJWT(user.id),
+      });
+    } else {
+      user.loginAttempts += 1;
+
+      if (user.loginAttempts >= 3) {
+        let suspensionLengthInMinutes = 30;
+        user.isSuspended = true;
+        user.suspensionStarts = new Date();
+        user.suspensionEnds = new Date(
+          Date.now() + suspensionLengthInMinutes * 60 * 1000
+        );
+      }
+      const err = new Error("Invalid credentials");
+      err.status = 401;
+      return next(err);
+    }
+  } catch (err) {
+    console.error(err);
+    const error = new Error("Server error, please try again later");
+    error.status = 500;
+    return next(error);
+  }
 };
 
 /* @desc      Forgot password
@@ -225,7 +295,7 @@ export const asyncApproveUser = async (req, res, next) => {
   user.isActive = true;
 
   // FIXME: update login link to the frontend login page
-  const loginLink = `http://localhost:5000/api/auth/login`;
+  const loginLink = `${process.env.BASE_URL}/api/auth/login`;
   const emailText = `
   Your account has been approved. Your username is ${user.username}
 
@@ -241,6 +311,7 @@ export const asyncApproveUser = async (req, res, next) => {
     });
   } catch (err) {
     console.error(err);
+    return res.status(500).send("Error sending email");
   }
 
   return res.send("User approved, email sent to user");
@@ -282,7 +353,7 @@ export const asyncRejectUser = async (req, res, next) => {
   accessRequest.status = "rejected";
   user.isActive = false;
 
-  // FIXME: update login link to the frontend login page
+  // TODO: update login link to the frontend login page
   const emailText = `
   Your account has been rejected.
   `;
@@ -294,7 +365,8 @@ export const asyncRejectUser = async (req, res, next) => {
       text: emailText,
     });
   } catch (err) {
-    console.error(err);
+    console.error("Error sending email", err);
+    return res.status(500).send("Error sending email");
   }
 
   return res.send("User rejected, email sent to user");
