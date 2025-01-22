@@ -85,12 +85,6 @@ export const asyncRegisterUser = async (req, res, next) => {
 
   const id = users.length + 1;
 
-  if (!email || !password || !firstName || !lastName || !securityQuestions) {
-    const err = new Error("Please provide all required fields.");
-    err.status = 400;
-    return next(err);
-  }
-
   const user = users.find((user) => user.email === email);
 
   if (user) {

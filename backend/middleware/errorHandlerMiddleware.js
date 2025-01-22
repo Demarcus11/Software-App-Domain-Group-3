@@ -9,3 +9,8 @@ const errorHandler = (err, req, res, next) => {
 };
 
 export default errorHandler;
+
+/*
+This middleware handles errors that zod cant catch such as email already in use,
+invalid credentials, etc.
+*/
