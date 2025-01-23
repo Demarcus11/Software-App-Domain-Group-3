@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import asyncSendEmail from "../utils/sendEmail.js";
 import generateJWT from "../utils/generateJWT.js";
 import generateUsername from "../utils/generateUsername.js";
@@ -7,10 +8,7 @@ import getSuspensionMessage from "../utils/suspensionMessage.js";
 let users = [
   {
     id: 1,
-    username: `JSmith${new Date().getMonth() + 1} ${new Date()
-      .getFullYear()
-      .toString()
-      .slice(-2)}`,
+    username: `${generateUsername({ firstName: "Jane", lastName: "Smith" })}`,
     email: "example@gmail.com",
     password: "$whdwdwbwu1627193j3eu2e8920i2282282e92unw",
     role: "accountant",
@@ -26,6 +24,7 @@ let users = [
     suspensionStarts: null,
     suspensionEnds: null,
     passwordExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    lastPasswordChangeAt: new Date(),
     lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -41,7 +40,7 @@ let users = [
       {
         id: 1,
         userId: 1,
-        oldPassword: "Kennesaw11",
+        oldPassword: "$dwndwoowmowdinwdw72829283uiefk",
         createdAt: new Date(),
       },
     ],
@@ -110,9 +109,19 @@ export const asyncRegisterUser = async (req, res, next) => {
     password: hashedPassword,
     role,
     profilePicture,
+    passwordExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    lastPasswordChangeAt: new Date(),
     loginAttempts: 0,
     username,
     securityQuestions,
+    passwordHistory: [
+      {
+        id: 1,
+        userId: id,
+        oldPassword: hashedPassword,
+        createdAt: new Date(),
+      },
+    ],
     accessRequests: [
       {
         id: nextAccessRequestId,
@@ -203,6 +212,14 @@ export const asyncLoginUser = async (req, res, next) => {
       return next(err);
     }
 
+    if (new Date() > user.passwordExpiresAt) {
+      const err = new Error(
+        "Your password has expired. Please reset your password"
+      );
+      err.status(403);
+      return next(err);
+    }
+
     if (await bcrypt.compare(password, user.password)) {
       user.loginAttempts = 0;
       return res.status(200).json({
@@ -240,7 +257,41 @@ export const asyncLoginUser = async (req, res, next) => {
    @access    Public
 */
 export const asyncForgotPassword = async (req, res, next) => {
-  res.status(200).json({ msg: "Forgot password" });
+  const { username } = req.body;
+
+  const user = users.find((user) => user.username === username);
+
+  if (!user) {
+    const err = new Error("Account not found");
+    err.status = 404;
+    return next(err);
+  }
+
+  const resetToken = crypto.randomBytes(32).toString("hex");
+  const resetTokenExpiry = new Date(Date.now() + 1000 * 60 * 10); // 10 minutes
+
+  user.passwordResetToken = resetToken;
+  user.passwordResetExpiry = resetTokenExpiry;
+
+  const resetLink = `${process.env.BASE_URL}/api/auth/reset-password?token=${resetToken}`;
+  const emailText = `
+  Password reset link: ${resetLink}
+  `;
+
+  try {
+    await asyncSendEmail({
+      to: user.email,
+      subject: "Password reset",
+      text: emailText,
+    });
+  } catch (err) {
+    console.error(err);
+    const error = new Error("Server error, please try again later");
+    error.status = 500;
+    return next(error);
+  }
+
+  res.status(200).json({ msg: "Password reset link sent to your email" });
 };
 
 /* @desc      Reset password
@@ -248,7 +299,50 @@ export const asyncForgotPassword = async (req, res, next) => {
    @access    Public
 */
 export const asyncResetPassword = async (req, res, next) => {
-  res.status(200).json({ msg: "Reset password" });
+  const { token } = req.query;
+  const { newPassword } = req.body;
+
+  const user = users.find((user) => user.passwordResetToken === token);
+
+  if (!user) {
+    const err = new Error("Invalid password reset token");
+    err.status = 400;
+    return next(err);
+  }
+
+  if (new Date() > user.passwordResetExpiry) {
+    const err = new Error("Password reset token has expired");
+    err.status = 400;
+    return next(err);
+  }
+
+  const passwordUsedBefore = user.passwordHistory.some((entry) =>
+    bcrypt.compare(newPassword, entry.oldPassword)
+  );
+
+  if (passwordUsedBefore) {
+    const err = new Error(
+      "Password has been used before. Please use a different password"
+    );
+    err.status = 400;
+    return next(err);
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash(newPassword, salt);
+  user.password = hashedPassword;
+  user.passwordResetToken = null;
+  user.passwordResetExpiry = null;
+  user.lastPasswordChangeAt = new Date();
+  user.passwordExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+  user.passwordHistory.push({
+    id: user.passwordHistory.length + 1,
+    userId: user.id,
+    oldPassword: hashedPassword,
+    createdAt: new Date(),
+  });
+
+  res.status(200).json({ msg: "Password has been reset" });
 };
 
 /* @desc      Approve user
