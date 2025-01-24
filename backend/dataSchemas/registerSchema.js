@@ -31,12 +31,10 @@ const registerSchema = z.object({
     message: "Invalid role. Please select either Admin, User, or Manager",
   }),
   profilePicture: z.string().url().optional(),
-  securityQuestions: z.array(
-    z.object({
-      question: z.string(),
-      answer: z.string(),
-    })
-  ),
+  securityQuestion: z.object({
+    id: z.number(),
+    answer: z.string(),
+  }),
 });
 
 export default registerSchema;

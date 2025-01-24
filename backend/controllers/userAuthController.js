@@ -5,6 +5,19 @@ import generateJWT from "../utils/generateJWT.js";
 import generateUsername from "../utils/generateUsername.js";
 import getSuspensionMessage from "../utils/suspensionMessage.js";
 
+// TODO: fix password expiration and password history logic
+// TODO: Update links to https://software-app-domain-group-3.onrender.com
+
+const predefinedSecurityQuestions = [
+  { id: 1, question: "What is your favorite food?" },
+  { id: 2, question: "What is your first pet name?" },
+  { id: 3, question: "What city were you born in?" },
+];
+
+const PASSWORD_EXPIRATION_TIME = 10 * 24 * 60 * 60 * 1000; // 10 days
+const MAX_LOGIN_ATTEMPTS = 3;
+const SUSPENSION_LENGTH_IN_MINUTES = 30;
+
 let users = [
   {
     id: 1,
@@ -23,25 +36,22 @@ let users = [
     loginAttempts: 0,
     suspensionStarts: null,
     suspensionEnds: null,
-    passwordExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    passwordExpiresAt: new Date(Date.now() + PASSWORD_EXPIRATION_TIME),
     lastPasswordChangeAt: new Date(),
-    lastLoginAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-    securityQuestions: [
-      {
-        id: 1,
-        userId: 1,
-        question: "What is your favorite food?",
-        answer: "Pizza",
-      },
-    ],
+    securityQuestion: {
+      id: 1,
+      question: "What is your favorite food?",
+      answer: "$2a$10$wHq8z8",
+    },
     passwordHistory: [
       {
         id: 1,
         userId: 1,
         oldPassword: "$dwndwoowmowdinwdw72829283uiefk",
         createdAt: new Date(),
+        isExpired: false,
       },
     ],
     accessRequests: [
@@ -65,7 +75,6 @@ let users = [
    @access    Public
 */
 export const asyncRegisterUser = async (req, res, next) => {
-  // TODO: Update links to https://software-app-domain-group-3.onrender.com
   /*
   - new user is put into the system
   - email is sent to admin email: ksuappdomainmanager@gmail.com
@@ -79,7 +88,7 @@ export const asyncRegisterUser = async (req, res, next) => {
     lastName,
     role = "User",
     profilePicture = null,
-    securityQuestions,
+    securityQuestion,
   } = req.body;
 
   const id = users.length + 1;
@@ -96,6 +105,21 @@ export const asyncRegisterUser = async (req, res, next) => {
   const hashedPassword = await bcrypt.hash(password, salt);
   const username = generateUsername({ firstName, lastName });
 
+  const selectedSecurityQuestion = predefinedSecurityQuestions.find(
+    (q) => q.id === securityQuestion.id
+  );
+
+  if (!selectedSecurityQuestion) {
+    const err = new Error("Invalid security question");
+    err.status = 400;
+    return next(err);
+  }
+
+  const hashedSecurityQuestionAnswer = bcrypt.hashSync(
+    securityQuestion.answer,
+    10
+  );
+
   const nextAccessRequestId =
     users.reduce(
       (maxId, user) => Math.max(maxId, user.accessRequests.length),
@@ -109,17 +133,20 @@ export const asyncRegisterUser = async (req, res, next) => {
     password: hashedPassword,
     role,
     profilePicture,
-    passwordExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    passwordExpiresAt: new Date(Date.now() + PASSWORD_EXPIRATION_TIME),
     lastPasswordChangeAt: new Date(),
     loginAttempts: 0,
     username,
-    securityQuestions,
+    securityQuestion: {
+      ...selectedSecurityQuestion,
+      answer: hashedSecurityQuestionAnswer,
+    },
     passwordHistory: [
       {
         id: 1,
-        userId: id,
         oldPassword: hashedPassword,
         createdAt: new Date(),
+        isExpired: false,
       },
     ],
     accessRequests: [
@@ -193,6 +220,16 @@ export const asyncLoginUser = async (req, res, next) => {
   }
 
   try {
+    const passwordAgeInMilliseconds =
+      Date.now() - new Date(user.createdAt).getTime();
+    const passwordAgeInDays = passwordAgeInMilliseconds / (1000 * 60 * 60 * 24);
+
+    if (passwordAgeInDays > PASSWORD_EXPIRATION_TIME / (1000 * 60 * 60 * 24)) {
+      user.isExpired = true;
+    } else {
+      user.isExpired = false;
+    }
+
     if (user.isSuspended) {
       const currentTime = new Date();
       if (currentTime >= user.suspensionEnds) {
@@ -226,21 +263,31 @@ export const asyncLoginUser = async (req, res, next) => {
         id: user.id,
         username: user.username,
         email: user.email,
+        role: user.role,
         profilePicture: user.profilePicture,
         token: generateJWT(user.id),
       });
     } else {
       user.loginAttempts += 1;
 
-      if (user.loginAttempts >= 3) {
-        let suspensionLengthInMinutes = 30;
+      if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
         user.isSuspended = true;
         user.suspensionStarts = new Date();
         user.suspensionEnds = new Date(
-          Date.now() + suspensionLengthInMinutes * 60 * 1000
+          Date.now() + SUSPENSION_LENGTH_IN_MINUTES * 60 * 1000
         );
+
+        // Immediately show the suspension message
+        const err = new Error(getSuspensionMessage(user.suspensionEnds));
+        err.status = 403;
+        return next(err);
       }
-      const err = new Error("Invalid credentials");
+
+      const err = new Error(
+        `Invalid credentials, you have ${
+          MAX_LOGIN_ATTEMPTS - user.loginAttempts
+        } remaining attempt(s)`
+      );
       err.status = 401;
       return next(err);
     }
@@ -257,13 +304,19 @@ export const asyncLoginUser = async (req, res, next) => {
    @access    Public
 */
 export const asyncForgotPassword = async (req, res, next) => {
-  const { username } = req.body;
+  const { username, securityAnswer } = req.body;
 
   const user = users.find((user) => user.username === username);
 
   if (!user) {
     const err = new Error("Account not found");
     err.status = 404;
+    return next(err);
+  }
+
+  if (!bcrypt.compareSync(securityAnswer, user.securityQuestion.answer)) {
+    const err = new Error("Incorrect security question answer");
+    err.status = 401;
     return next(err);
   }
 
@@ -316,16 +369,27 @@ export const asyncResetPassword = async (req, res, next) => {
     return next(err);
   }
 
-  const passwordUsedBefore = user.passwordHistory.some((entry) =>
-    bcrypt.compare(newPassword, entry.oldPassword)
+  const passwordUsedBefore = await Promise.all(
+    user.passwordHistory.map(async (entry) => {
+      const match = await bcrypt.compare(newPassword, entry.oldPassword);
+      return match;
+    })
   );
 
-  if (passwordUsedBefore) {
+  const passwordUsedBeforeMatch = passwordUsedBefore.some(
+    (match) => match === true
+  );
+
+  if (passwordUsedBeforeMatch) {
     const err = new Error(
       "Password has been used before. Please use a different password"
     );
     err.status = 400;
     return next(err);
+  }
+
+  if (user.passwordHistory.length > 0) {
+    user.passwordHistory[user.passwordHistory.length - 1].isExpired = true;
   }
 
   const salt = await bcrypt.genSalt(10);
@@ -334,7 +398,7 @@ export const asyncResetPassword = async (req, res, next) => {
   user.passwordResetToken = null;
   user.passwordResetExpiry = null;
   user.lastPasswordChangeAt = new Date();
-  user.passwordExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+  user.passwordExpiresAt = new Date(Date.now() + PASSWORD_EXPIRATION_TIME);
   user.passwordHistory.push({
     id: user.passwordHistory.length + 1,
     userId: user.id,
@@ -382,7 +446,6 @@ export const asyncApproveUser = async (req, res, next) => {
   accessRequest.status = "approved";
   user.isActive = true;
 
-  // FIXME: update login link to the frontend login page
   const loginLink = `${process.env.BASE_URL}/api/auth/login`;
   const emailText = `
   Your account has been approved. Your username is ${user.username}
@@ -441,7 +504,6 @@ export const asyncRejectUser = async (req, res, next) => {
   accessRequest.status = "rejected";
   user.isActive = false;
 
-  // TODO: update login link to the frontend login page
   const emailText = `
   Your account has been rejected.
   `;
