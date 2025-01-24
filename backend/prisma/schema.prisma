@@ -40,22 +40,23 @@ model User {
   isSuspended Boolean @default(false)
   suspensionStart DateTime?
   suspensionEnd DateTime?
-  passwordExpiresAt DateTime
   failedLoginAttempts Int @default(0)
-  lastLoginAt DateTime?
+  lastPasswordChangeAt DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  securityQuestions SecurityQuestion[]
+  securityQuestionId Int
+  securityAnswer String
+
+  securityQuestion SecurityQuestion? @relation(fields: [securityQuestionId], references: [id])
   passwordHistory PasswordHistory[]
   accessRequests AccessRequest[]
 }
 
 model SecurityQuestion {
   id Int @id @default(autoincrement())
-  userId Int @unique
-  question String
-  answer String
-  user User @relation(fields: [userId], references: [id])
+  question String @unique
+  
+  users User[]
 }
 
 model PasswordHistory {
@@ -63,6 +64,7 @@ model PasswordHistory {
   userId Int 
   oldPassword String 
   createdAt DateTime @default(now())
+  isExpired Boolean @default(false)
 
   user User @relation(fields: [userId], references: [id]) 
 }
@@ -76,61 +78,31 @@ model AccessRequest {
   dateOfBirth DateTime 
   status RequestStatus @default(PENDING)
   createdAt DateTime @default(now())
+  userId Int
 
-  userId Int?
-  user User? @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
 }
 
 /*
 
-DB Schema:
+1. User table example:
 
-User:
+id | email                 | username   | password         |   role     | passwordResetToken | passwordResetTokenExpiry | firstName | lastName | profilePicture               | isActive | isSuspended | suspensionStart | suspensionEnd | failedLoginAttempts | lastPasswordChangeAt     | createdAt           | updatedAt          | securityQuestionId | securityAnswer |
+1  | jane.smith@email.com | Jsmith0125 | $whosquinonqoqno | ACCOUNTANT | null                | null                     | Jane      | Smith    | https://example.com/jane.jpg | true     | false       | null           | null           | 0                   | 2023-10-01 12:00:00     | 2023-10-01 12:00:00 | 2023-10-01 12:00:00 | 1                  | $oqnqqno2ifeni |
 
-Login in (Req 5 & 6):
-- email, username, password: used for login
-- profilePicture: stores URL to user's picture
-- lastLoginAt: to help with login attempts
 
-Roles and Permissions (Req 1, 2, 3):
-- role
+2. SecurityQuestion table example:
+id | question
+1  | What is your favorite color?
+2  | What is your mother's maiden name?
 
-Account activation and deactivation (Req 4, 17):
-- isActive: to check if user is enabled or disabled
-- isSuspended, suspensionStart, suspensionEnd: to help with login attempts
+3. PasswordHistory table example:
+id | userId | oldPassword         | createdAt           | isExpired
+1  | 2      | $whosquinonqoqno    | 2023-10-01 12:00:00 | true
+2  | 1      | $whoswindwnonqoqno  | 2023-10-01 12:00:00 | false
 
-Security measures (Req 10, 11, 12, 13):
-- passwordResetToken, passwordResetTokenExpiry: for password reset functionality
-- passwordExpiresAt: to help with password expiration
-- failedLoginAttempts: to help with login attempts
-- passwordHistory: to store old passwords
-
-Relations:
-- securityQuestions: One-to-many relation with SecurityQuestion to store security questions and answers for password recovery
-- passwordHistory: One-to-many relation with PasswordHistory to track old passwords
-- accessRequests: One-to-many relation with AccessRequest for tracking new user access requests
-
-SecurityQuestion: 
-
-Forgot password functionality (Req 9):
-- question, answer
-- userId: to link each question to a user
-
-PasswordHistory:
-
-Password security (Req 11, 12):
-
-- oldPassword: stores previously used passwords
-- createdAt: stores when each password was created
-- userId: to link password to each user
-
-AccessRequest:
-
-User registration (Req 8):
-
-- firstName, lastName, email, address, dateOfBirth: to store user information
-- status: to track the status of the access request
-- createdAt: to store when the request was created
-- userId: to link each request to a user
+4. AccessRequest table example:
+id | firstName | lastName | email                 | address          | dateOfBirth     | status  | createdAt           | userId
+1  | Jane      | Smith    | jane.smith@gmail.com  | 123 Main St, City | 1990-02-01     | PENDING | 2023-10-01 12:00:00 | 1
 
 */
