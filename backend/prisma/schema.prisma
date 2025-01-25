@@ -23,8 +23,10 @@ model User {
   passwordResetTokenExpiry DateTime?
   firstName String
   lastName String
+  dateOfBirth DateTime
+  address String
   profilePicture String?
-  isActive Boolean @default(true)
+  isActive Boolean @default(false)
   isSuspended Boolean @default(false)
   suspensionStart DateTime?
   suspensionEnd DateTime?

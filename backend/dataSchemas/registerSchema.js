@@ -33,6 +33,18 @@ const registerSchema = z.object({
     id: z.number(),
     answer: z.string(),
   }),
+  address: z.string().min(1, {
+    message: "Address is required",
+  }),
+  dateOfBirth: z
+    .string()
+    .min(1, {
+      message: "Date of birth is required",
+    })
+    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/, {
+      message:
+        "Invalid date format. Use ISO 8601 format (e.g. 2000-01-01T00:00:00Z)",
+    }),
 });
 
 export default registerSchema;

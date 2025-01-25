@@ -87,6 +87,8 @@ export const asyncRegisterUser = async (req, res, next) => {
     password,
     firstName,
     lastName,
+    address,
+    dateOfBirth,
     roleId,
     profilePicture,
     securityQuestion,
@@ -132,11 +134,24 @@ export const asyncRegisterUser = async (req, res, next) => {
         password: hashedPassword,
         firstName,
         lastName,
+        address,
+        dateOfBirth,
         roleId,
         profilePicture,
         username,
         securityQuestionId: securityQuestion.id,
         securityAnswer: hashedSecurityQuestionAnswer,
+      },
+    });
+
+    await prisma.accessRequest.create({
+      data: {
+        userId: user.id,
+        firstName,
+        lastName,
+        email,
+        address,
+        dateOfBirth,
       },
     });
 
@@ -413,10 +428,14 @@ export const asyncApproveUser = async (req, res, next) => {
   */
   const { id } = req.params;
 
-  const user = users.find((user) => user.id === parseInt(id));
+  const user = await prisma.user.findUnique({
+    where: {
+      id: parseInt(id),
+    },
+  });
 
   if (!user) {
-    const err = new Error("User not found");
+    const err = new Error("Account not found");
     err.status = 404;
     return next(err);
   }
@@ -425,16 +444,34 @@ export const asyncApproveUser = async (req, res, next) => {
     return res.status(400).send("This account has already been approved");
   }
 
-  const accessRequest = user.accessRequests.find(
-    (request) => request.userId === parseInt(id) && request.status === "pending"
-  );
+  const accessRequest = await prisma.accessRequest.findFirst({
+    where: {
+      userId: parseInt(id),
+      statusId: 1,
+    },
+  });
 
   if (!accessRequest) {
     return res.status(400).send("Access request not found");
   }
 
-  accessRequest.status = "approved";
-  user.isActive = true;
+  await prisma.accessRequest.update({
+    where: {
+      id: accessRequest.id,
+    },
+    data: {
+      statusId: 2,
+    },
+  });
+
+  await prisma.user.update({
+    where: {
+      id: parseInt(id),
+    },
+    data: {
+      isActive: true,
+    },
+  });
 
   const loginLink = `${process.env.BASE_URL}/api/auth/login`;
   const emailText = `
@@ -455,7 +492,7 @@ export const asyncApproveUser = async (req, res, next) => {
     return res.status(500).send("Error sending email");
   }
 
-  return res.send("User approved, email sent to user");
+  return res.send(`User approved, email sent to ${user.email}`);
 };
 
 export const asyncRejectUser = async (req, res, next) => {
