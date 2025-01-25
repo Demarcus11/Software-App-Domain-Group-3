@@ -1,7 +1,5 @@
 import * as z from "zod";
 
-const RoleEnum = z.enum(["Admin", "User", "Manager"]);
-
 const registerSchema = z.object({
   email: z.string().email({
     message: "Please enter a valid email address",
@@ -27,8 +25,8 @@ const registerSchema = z.object({
   lastName: z.string().min(1, {
     message: "Last name is required",
   }),
-  role: RoleEnum.refine((val) => ["Admin", "User", "Manager"].includes(val), {
-    message: "Invalid role. Please select either Admin, User, or Manager",
+  roleId: z.number({
+    message: "Role is required",
   }),
   profilePicture: z.string().url().optional(),
   securityQuestion: z.object({

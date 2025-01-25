@@ -1,3 +1,5 @@
+import prisma from "../config/prismaClient.js";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import asyncSendEmail from "../utils/sendEmail.js";
@@ -5,7 +7,6 @@ import generateJWT from "../utils/generateJWT.js";
 import generateUsername from "../utils/generateUsername.js";
 import getSuspensionMessage from "../utils/suspensionMessage.js";
 
-// TODO: fix password expiration and password history logic
 // TODO: Update links to https://software-app-domain-group-3.onrender.com
 
 const predefinedSecurityQuestions = [
@@ -86,110 +87,101 @@ export const asyncRegisterUser = async (req, res, next) => {
     password,
     firstName,
     lastName,
-    role = "User",
-    profilePicture = null,
+    roleId,
+    profilePicture,
     securityQuestion,
   } = req.body;
 
-  const id = users.length + 1;
+  try {
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    const username = generateUsername({ firstName, lastName });
 
-  const user = users.find((user) => user.email === email);
-
-  if (user) {
-    const err = new Error("This email is already in use. Try another email.");
-    err.status = 400;
-    return next(err);
-  }
-
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(password, salt);
-  const username = generateUsername({ firstName, lastName });
-
-  const selectedSecurityQuestion = predefinedSecurityQuestions.find(
-    (q) => q.id === securityQuestion.id
-  );
-
-  if (!selectedSecurityQuestion) {
-    const err = new Error("Invalid security question");
-    err.status = 400;
-    return next(err);
-  }
-
-  const hashedSecurityQuestionAnswer = bcrypt.hashSync(
-    securityQuestion.answer,
-    10
-  );
-
-  const nextAccessRequestId =
-    users.reduce(
-      (maxId, user) => Math.max(maxId, user.accessRequests.length),
-      0
-    ) + 1;
-  const newUser = {
-    id,
-    firstName,
-    lastName,
-    email,
-    password: hashedPassword,
-    role,
-    profilePicture,
-    passwordExpiresAt: new Date(Date.now() + PASSWORD_EXPIRATION_TIME),
-    lastPasswordChangeAt: new Date(),
-    loginAttempts: 0,
-    username,
-    securityQuestion: {
-      ...selectedSecurityQuestion,
-      answer: hashedSecurityQuestionAnswer,
-    },
-    passwordHistory: [
-      {
-        id: 1,
-        oldPassword: hashedPassword,
-        createdAt: new Date(),
-        isExpired: false,
+    const securityQuestionExists = await prisma.securityQuestion.findFirst({
+      where: {
+        id: securityQuestion.id,
       },
-    ],
-    accessRequests: [
-      {
-        id: nextAccessRequestId,
-        userId: id,
+    });
+
+    if (!securityQuestionExists) {
+      const err = new Error("Invalid security question");
+      err.status = 400;
+      return next(err);
+    }
+
+    const roleExists = await prisma.role.findFirst({
+      where: {
+        id: roleId,
+      },
+    });
+
+    if (!roleExists) {
+      const err = new Error("Invalid role");
+      err.status = 400;
+      return next(err);
+    }
+
+    const hashedSecurityQuestionAnswer = bcrypt.hashSync(
+      securityQuestion.answer,
+      10
+    );
+
+    let user = await prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
         firstName,
         lastName,
-        email,
-        address: "123 Main St, Kennesaw, GA 30144",
-        dateOfBirth: "1999-01-01",
-        status: "pending",
-        createdAt: new Date(),
+        roleId,
+        profilePicture,
+        username,
+        securityQuestionId: securityQuestion.id,
+        securityAnswer: hashedSecurityQuestionAnswer,
       },
-    ],
-  };
+    });
 
-  users.push(newUser);
+    const role = await prisma.role.findUnique({
+      where: {
+        id: roleId,
+      },
+    });
 
-  const approveLink = `${process.env.BASE_URL}/api/auth/approve-user/${id}`;
-  const rejectLink = `${process.env.BASE_URL}/api/auth/reject-user/${id}`;
+    const approveLink = `${process.env.BASE_URL}/api/auth/approve-user/${user.id}`;
+    const rejectLink = `${process.env.BASE_URL}/api/auth/reject-user/${user.id}`;
 
-  // Send email to admin email: ksuappdomainproject@gmail.com
-  const emailText = `
-  User account details:
-  - First Name: ${firstName}
-  - Last Name: ${lastName}
-  - Email: ${email}
-  - Role: ${role}
+    const emailText = `
+      User account details:
+      - First Name: ${firstName}
+      - Last Name: ${lastName}
+      - Email: ${email}
+      - Role: ${role.name}
 
-  Click the link below to approve or deny this request:
-  - Approve: ${approveLink}
-  - Reject: ${rejectLink}
-  `;
-  try {
+      Click the link below to approve or deny this request:
+      - Approve: ${approveLink}
+      - Reject: ${rejectLink}
+    `;
+
     await asyncSendEmail({
       to: "ksuappdomainmanager@gmail.com",
       subject: "New user account creation request",
       text: emailText,
     });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).send("Error sending email");
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      if (err.meta.target.includes("email")) {
+        return res.status(400).json({
+          message: "Email is already in use. Please try another one",
+        });
+      }
+    }
+
+    console.error(err);
+    const error = new Error("Server error, please try again later");
+    error.status = 500;
+    return next(error);
   }
 
   res.status(200).json({
@@ -430,9 +422,7 @@ export const asyncApproveUser = async (req, res, next) => {
   }
 
   if (user.isActive) {
-    return res
-      .status(400)
-      .send("Your account has already been approved, check your email");
+    return res.status(400).send("This account has already been approved");
   }
 
   const accessRequest = user.accessRequests.find(
