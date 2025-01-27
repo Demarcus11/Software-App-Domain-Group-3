@@ -470,55 +470,47 @@ export const asyncApproveUser = async (req, res, next) => {
 export const asyncRejectUser = async (req, res, next) => {
   const { id } = req.params;
 
-  const user = users.find((user) => user.id === parseInt(id));
-
-  if (!user) {
-    const err = new Error("User not found");
-    err.status = 404;
-    return next(err);
-  }
-
-  if (user.isActive) {
-    return res
-      .status(400)
-      .send("Your account has already been approved, check your email");
-  }
-
-  const rejectedAccessRequest = user.accessRequests.find(
-    (request) =>
-      request.userId === parseInt(id) && request.status === "rejected"
-  );
-  if (rejectedAccessRequest) {
-    return res.status(400).send("Access request already rejected");
-  }
-
-  const accessRequest = user.accessRequests.find(
-    (request) => request.userId === parseInt(id) && request.status === "pending"
-  );
-
-  if (!accessRequest) {
-    return res.status(400).send("Access request not found");
-  }
-
-  accessRequest.status = "rejected";
-  user.isActive = false;
-
-  const emailText = `
-  Your account has been rejected.
-  `;
-
   try {
-    await asyncSendEmail({
+    const user = await userAuthUtils.findUserById(parseInt(id));
+
+    if (!user) {
+      const err = new Error("Account not found");
+      err.status = 404;
+      return next(err);
+    }
+
+    if (user.isActive) {
+      return res
+        .status(400)
+        .json({ message: "This account has already been rejected" });
+    }
+
+    const pendingAccessRequest =
+      await userAuthUtils.findUserPendingAccessRequest(parseInt(id));
+
+    if (!pendingAccessRequest) {
+      const err = new Error("No pending access requests for this user");
+      err.status = 404;
+      return next(err);
+    }
+
+    await userAuthUtils.rejectUserAccessRequest(parseInt(id));
+
+    const emailText = `Your account has been rejected.`;
+
+    await userAuthUtils.sendEmail({
       to: user.email,
       subject: "Account rejected",
       text: emailText,
     });
-  } catch (err) {
-    console.error("Error sending email", err);
-    return res.status(500).send("Error sending email");
-  }
 
-  return res.send("User rejected, email sent to user");
+    return res.status(200).send(`User rejected, email sent to ${user.email}`);
+  } catch (err) {
+    console.error(err);
+    const error = new Error("Server error, please try again later");
+    error.status = 500;
+    return next(error);
+  }
 };
 
 export default {

@@ -186,6 +186,26 @@ export const approveUserAccessRequest = async (userId) => {
   });
 };
 
+export const rejectUserAccessRequest = async (userId) => {
+  await prisma.user.update({
+    where: {
+      id: userId,
+    },
+    data: {
+      isActive: false,
+    },
+  });
+
+  await prisma.accessRequest.updateMany({
+    where: {
+      id: userId,
+    },
+    data: {
+      statusId: 3,
+    },
+  });
+};
+
 export const updateUserResetToken = async ({
   userId,
   resetToken,
@@ -232,6 +252,7 @@ export default {
   sendEmail,
   findUserPendingAccessRequest,
   approveUserAccessRequest,
+  rejectUserAccessRequest,
   isSuspensionOver,
   isSecurityAnswerValid,
   updateUserResetToken,
