@@ -19,7 +19,7 @@ model User {
   username  String @db.VarChar(30)
   password  String
   roleId    Int @default(1)
-  passwordResetToken String? 
+  passwordResetToken String? @unique
   passwordResetTokenExpiry DateTime?
   firstName String
   lastName String

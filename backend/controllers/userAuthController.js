@@ -2,6 +2,7 @@ import prisma from "../config/prismaClient.js";
 import { Prisma } from "@prisma/client";
 import userAuthUtils from "../utils/userAuthUtils.js";
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
 
 // TODO: Update links to https://software-app-domain-group-3.onrender.com
 
@@ -241,7 +242,6 @@ export const asyncLoginUser = async (req, res, next) => {
 
       await userAuthUtils.resetFailedLoginAttempts(user.id);
 
-      // Define updatedUser here
       const updatedUser = await userAuthUtils.findUserByUsername(username);
 
       return res.status(200).json({
@@ -288,45 +288,47 @@ export const asyncLoginUser = async (req, res, next) => {
 export const asyncForgotPassword = async (req, res, next) => {
   const { username, securityAnswer } = req.body;
 
-  const user = users.find((user) => user.username === username);
+  try {
+    const user = await userAuthUtils.findUserByUsername(username);
 
-  if (!user) {
-    const err = new Error("Account not found");
-    err.status = 404;
-    return next(err);
-  }
+    if (!user) {
+      const err = new Error("Account not found");
+      err.status = 404;
+      return next(err);
+    }
+    if (!userAuthUtils.isSecurityAnswerValid(user, securityAnswer)) {
+      const err = new Error("Incorrect security question answer");
+      err.status = 401;
+      return next(err);
+    }
 
-  if (!bcrypt.compareSync(securityAnswer, user.securityQuestion.answer)) {
-    const err = new Error("Incorrect security question answer");
-    err.status = 401;
-    return next(err);
-  }
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetTokenExpiry = new Date(Date.now() + 1000 * 60 * 10); // 10 minutes
 
-  const resetToken = crypto.randomBytes(32).toString("hex");
-  const resetTokenExpiry = new Date(Date.now() + 1000 * 60 * 10); // 10 minutes
+    await userAuthUtils.updateUserResetToken({
+      userId: user.id,
+      resetToken,
+      resetTokenExpiry,
+    });
 
-  user.passwordResetToken = resetToken;
-  user.passwordResetExpiry = resetTokenExpiry;
-
-  const resetLink = `${process.env.BASE_URL}/api/auth/reset-password?token=${resetToken}`;
-  const emailText = `
+    const resetLink = `${process.env.BASE_URL}/api/auth/reset-password?token=${resetToken}`;
+    const emailText = `
   Password reset link: ${resetLink}
   `;
 
-  try {
-    await asyncSendEmail({
+    await userAuthUtils.sendEmail({
       to: user.email,
       subject: "Password reset",
       text: emailText,
     });
+
+    res.status(200).json({ msg: "Password reset link sent to your email" });
   } catch (err) {
     console.error(err);
     const error = new Error("Server error, please try again later");
     error.status = 500;
     return next(error);
   }
-
-  res.status(200).json({ msg: "Password reset link sent to your email" });
 };
 
 /* @desc      Reset password
@@ -337,58 +339,71 @@ export const asyncResetPassword = async (req, res, next) => {
   const { token } = req.query;
   const { newPassword } = req.body;
 
-  const user = users.find((user) => user.passwordResetToken === token);
+  try {
+    const user = await prisma.user.findUnique({
+      where: {
+        passwordResetToken: token,
+      },
+      include: {
+        passwordHistory: true,
+      },
+    });
 
-  if (!user) {
-    const err = new Error("Invalid password reset token");
-    err.status = 400;
-    return next(err);
-  }
+    if (!user) {
+      const err = new Error("Invalid or expired password reset token");
+      err.status = 400;
+      return next(err);
+    }
 
-  if (new Date() > user.passwordResetExpiry) {
-    const err = new Error("Password reset token has expired");
-    err.status = 400;
-    return next(err);
-  }
-
-  const passwordUsedBefore = await Promise.all(
-    user.passwordHistory.map(async (entry) => {
-      const match = await bcrypt.compare(newPassword, entry.oldPassword);
-      return match;
-    })
-  );
-
-  const passwordUsedBeforeMatch = passwordUsedBefore.some(
-    (match) => match === true
-  );
-
-  if (passwordUsedBeforeMatch) {
-    const err = new Error(
-      "Password has been used before. Please use a different password"
+    const passwordUsedBefore = await Promise.all(
+      user.passwordHistory.map(async (entry) => {
+        const match = await bcrypt.compare(newPassword, entry.oldPassword);
+        return match;
+      })
     );
-    err.status = 400;
-    return next(err);
+
+    const passwordUsedBeforeMatch = passwordUsedBefore.some((match) => match);
+
+    if (passwordUsedBeforeMatch) {
+      const err = new Error("Cannot use previously used passwords");
+      err.status = 400;
+      return next(err);
+    }
+
+    if (user.passwordHistory.length > 0) {
+      const lastEntry = user.passwordHistory[user.passwordHistory.length - 1];
+      await prisma.passwordHistory.update({
+        where: { id: lastEntry.id },
+        data: { isExpired: true },
+      });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.passwordHistory.create({
+      data: {
+        oldPassword: hashedNewPassword,
+        isExpired: false,
+        userId: user.id,
+      },
+    });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedNewPassword,
+        passwordResetToken: null,
+        passwordResetTokenExpiry: null,
+        lastPasswordChangeAt: new Date(),
+      },
+    });
+
+    res.status(200).json({ msg: "Password has been reset" });
+  } catch (err) {
+    console.error(err);
+    const error = new Error("Server error, please try again later");
+    error.status = 500;
+    return next(error);
   }
-
-  if (user.passwordHistory.length > 0) {
-    user.passwordHistory[user.passwordHistory.length - 1].isExpired = true;
-  }
-
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(newPassword, salt);
-  user.password = hashedPassword;
-  user.passwordResetToken = null;
-  user.passwordResetExpiry = null;
-  user.lastPasswordChangeAt = new Date();
-  user.passwordExpiresAt = new Date(Date.now() + PASSWORD_EXPIRATION_TIME);
-  user.passwordHistory.push({
-    id: user.passwordHistory.length + 1,
-    userId: user.id,
-    oldPassword: hashedPassword,
-    createdAt: new Date(),
-  });
-
-  res.status(200).json({ msg: "Password has been reset" });
 };
 
 /* @desc      Approve user

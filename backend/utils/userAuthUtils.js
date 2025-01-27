@@ -40,6 +40,10 @@ export const isPasswordValid = async (user, password) => {
   return await bcrypt.compare(password, user.password);
 };
 
+export const isSecurityAnswerValid = async (user, securityAnswer) => {
+  return await bcrypt.compare(securityAnswer, user.securityAnswer);
+};
+
 export const isUserSuspended = (user) => {
   if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
     if (user.isSuspended) {
@@ -182,6 +186,33 @@ export const approveUserAccessRequest = async (userId) => {
   });
 };
 
+export const updateUserResetToken = async ({
+  userId,
+  resetToken,
+  resetTokenExpiry,
+}) => {
+  return await prisma.user.update({
+    where: {
+      id: userId,
+    },
+    data: {
+      passwordResetToken: resetToken,
+      passwordResetTokenExpiry: resetTokenExpiry,
+    },
+  });
+};
+
+export const findUserByToken = async (token) => {
+  return await prisma.user.findFirst({
+    where: {
+      passwordResetToken: token,
+      passwordResetTokenExpiry: {
+        gte: new Date(),
+      },
+    },
+  });
+};
+
 export default {
   findUserByUsername,
   findUserById,
@@ -202,5 +233,8 @@ export default {
   findUserPendingAccessRequest,
   approveUserAccessRequest,
   isSuspensionOver,
+  isSecurityAnswerValid,
+  updateUserResetToken,
+  findUserByToken,
   MAX_LOGIN_ATTEMPTS,
 };
