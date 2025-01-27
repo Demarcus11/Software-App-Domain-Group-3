@@ -6,64 +6,6 @@ import bcrypt from "bcryptjs";
 
 // TODO: Update links to https://software-app-domain-group-3.onrender.com
 
-const predefinedSecurityQuestions = [
-  { id: 1, question: "What is your favorite food?" },
-  { id: 2, question: "What is your first pet name?" },
-  { id: 3, question: "What city were you born in?" },
-];
-
-let users = [
-  {
-    id: 1,
-    username: `dinwdidwn`,
-    email: "example@gmail.com",
-    password: "$whdwdwbwu1627193j3eu2e8920i2282282e92unw",
-    role: "accountant",
-    passwordResetToken: null,
-    passwordResetExpiry: null,
-    firstName: "Jane",
-    lastName: "Smith",
-    profilePicture:
-      "https://www.gravatar.com/avatar/205e460b479e2e5b48aec07710c08d50?f=y",
-    isActive: true,
-    isSuspended: false,
-    loginAttempts: 0,
-    suspensionStarts: null,
-    suspensionEnds: null,
-    passwordExpiresAt: new Date(Date.now()),
-    lastPasswordChangeAt: new Date(),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    securityQuestion: {
-      id: 1,
-      question: "What is your favorite food?",
-      answer: "$2a$10$wHq8z8",
-    },
-    passwordHistory: [
-      {
-        id: 1,
-        userId: 1,
-        oldPassword: "$dwndwoowmowdinwdw72829283uiefk",
-        createdAt: new Date(),
-        isExpired: false,
-      },
-    ],
-    accessRequests: [
-      {
-        id: 1,
-        userId: 1,
-        firstName: "Jane",
-        lastName: "Smith",
-        email: "example@gmail.com",
-        address: "123 Main St, Kennesaw, GA 30144",
-        dateOfBirth: "1999-01-01",
-        status: "pending",
-        createdAt: new Date(),
-      },
-    ],
-  },
-];
-
 /* @desc      Register a user
    @endpoint  POST /register
    @access    Public
