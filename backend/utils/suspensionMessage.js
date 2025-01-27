@@ -1,7 +1,8 @@
 function getSuspensionMessage(suspensionEnds) {
   const currentTime = new Date();
+  suspensionEnds = new Date(suspensionEnds);
   const timeDifference = suspensionEnds - currentTime;
-  const minutesRemaining = Math.ceil(timeDifference / (60 * 1000)); // Convert ms to minutes
+  const minutesRemaining = Math.ceil(timeDifference / (60 * 1000));
 
   const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 

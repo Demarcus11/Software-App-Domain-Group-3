@@ -1,11 +1,7 @@
 import prisma from "../config/prismaClient.js";
 import { Prisma } from "@prisma/client";
-import bcrypt from "bcryptjs";
+import userAuthUtils from "../utils/userAuthUtils.js";
 import crypto from "crypto";
-import asyncSendEmail from "../utils/sendEmail.js";
-import generateJWT from "../utils/generateJWT.js";
-import generateUsername from "../utils/generateUsername.js";
-import getSuspensionMessage from "../utils/suspensionMessage.js";
 
 // TODO: Update links to https://software-app-domain-group-3.onrender.com
 
@@ -15,14 +11,10 @@ const predefinedSecurityQuestions = [
   { id: 3, question: "What city were you born in?" },
 ];
 
-const PASSWORD_EXPIRATION_TIME = 10 * 24 * 60 * 60 * 1000; // 10 days
-const MAX_LOGIN_ATTEMPTS = 3;
-const SUSPENSION_LENGTH_IN_MINUTES = 30;
-
 let users = [
   {
     id: 1,
-    username: `${generateUsername({ firstName: "Jane", lastName: "Smith" })}`,
+    username: `dinwdidwn`,
     email: "example@gmail.com",
     password: "$whdwdwbwu1627193j3eu2e8920i2282282e92unw",
     role: "accountant",
@@ -37,7 +29,7 @@ let users = [
     loginAttempts: 0,
     suspensionStarts: null,
     suspensionEnds: null,
-    passwordExpiresAt: new Date(Date.now() + PASSWORD_EXPIRATION_TIME),
+    passwordExpiresAt: new Date(Date.now()),
     lastPasswordChangeAt: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -95,40 +87,35 @@ export const asyncRegisterUser = async (req, res, next) => {
   } = req.body;
 
   try {
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-    const username = generateUsername({ firstName, lastName });
-
     const securityQuestionExists = await prisma.securityQuestion.findFirst({
-      where: {
-        id: securityQuestion.id,
-      },
+      where: { id: securityQuestion.id },
     });
 
     if (!securityQuestionExists) {
-      const err = new Error("Invalid security question");
-      err.status = 400;
+      const err = new Error(
+        `Security question with id ${securityQuestion.id} not found`
+      );
+      err.status = 404;
       return next(err);
     }
 
     const roleExists = await prisma.role.findFirst({
-      where: {
-        id: roleId,
-      },
+      where: { id: roleId },
     });
 
     if (!roleExists) {
-      const err = new Error("Invalid role");
-      err.status = 400;
+      const err = new Error(`Role with id ${roleId} not found`);
+      err.status = 404;
       return next(err);
     }
 
-    const hashedSecurityQuestionAnswer = bcrypt.hashSync(
-      securityQuestion.answer,
-      10
+    const hashedPassword = await userAuthUtils.hashPassword(password);
+    const hashedSecurityQuestionAnswer = await userAuthUtils.hashSecurityAnswer(
+      securityQuestion.answer
     );
+    const username = userAuthUtils.generateUsername({ firstName, lastName });
 
-    let user = await prisma.user.create({
+    const user = await prisma.user.create({
       data: {
         email,
         password: hashedPassword,
@@ -164,7 +151,10 @@ export const asyncRegisterUser = async (req, res, next) => {
     const approveLink = `${process.env.BASE_URL}/api/auth/approve-user/${user.id}`;
     const rejectLink = `${process.env.BASE_URL}/api/auth/reject-user/${user.id}`;
 
-    const emailText = `
+    await userAuthUtils.sendEmail({
+      to: "ksuappdomainmanager@gmail.com",
+      subject: "New user account creation request",
+      text: ` 
       User account details:
       - First Name: ${firstName}
       - Last Name: ${lastName}
@@ -174,12 +164,11 @@ export const asyncRegisterUser = async (req, res, next) => {
       Click the link below to approve or deny this request:
       - Approve: ${approveLink}
       - Reject: ${rejectLink}
-    `;
+    `,
+    });
 
-    await asyncSendEmail({
-      to: "ksuappdomainmanager@gmail.com",
-      subject: "New user account creation request",
-      text: emailText,
+    res.status(200).json({
+      msg: "Email sent to admin for approval, check your email for updates",
     });
   } catch (err) {
     if (
@@ -198,10 +187,6 @@ export const asyncRegisterUser = async (req, res, next) => {
     error.status = 500;
     return next(error);
   }
-
-  res.status(200).json({
-    msg: "Email sent to admin for approval, check your email for updates",
-  });
 };
 
 /* @desc      Login a user 
@@ -216,38 +201,22 @@ export const asyncLoginUser = async (req, res, next) => {
   */
   const { username, password } = req.body;
 
-  let user;
-
-  user = users.find((user) => user.username === username);
-
-  if (!user) {
-    const err = new Error("Account not found");
-    err.status = 404;
-    return next(err);
-  }
-
   try {
-    const passwordAgeInMilliseconds =
-      Date.now() - new Date(user.createdAt).getTime();
-    const passwordAgeInDays = passwordAgeInMilliseconds / (1000 * 60 * 60 * 24);
+    const user = await userAuthUtils.findUserByUsername(username);
 
-    if (passwordAgeInDays > PASSWORD_EXPIRATION_TIME / (1000 * 60 * 60 * 24)) {
-      user.isExpired = true;
-    } else {
-      user.isExpired = false;
+    if (!user) {
+      const err = new Error("Account not found");
+      err.status = 404;
+      return next(err);
     }
 
-    if (user.isSuspended) {
-      const currentTime = new Date();
-      if (currentTime >= user.suspensionEnds) {
-        user.isSuspended = false;
-        user.suspensionStarts = null;
-        user.suspensionEnds = null;
-      } else {
-        const err = new Error(getSuspensionMessage(user.suspensionEnds));
-        err.status = 403;
-        return next(err);
-      }
+    if (userAuthUtils.isPasswordExpired(user)) {
+      await expirePassword(user.id);
+      const err = new Error(
+        "Your password has expired. Please reset your password"
+      );
+      err.status = 403;
+      return next(err);
     }
 
     if (!user.isActive) {
@@ -256,46 +225,52 @@ export const asyncLoginUser = async (req, res, next) => {
       return next(err);
     }
 
-    if (new Date() > user.passwordExpiresAt) {
-      const err = new Error(
-        "Your password has expired. Please reset your password"
-      );
-      err.status(403);
-      return next(err);
-    }
+    if (await userAuthUtils.isPasswordValid(user, password)) {
+      if (user.isSuspended) {
+        if (userAuthUtils.isSuspensionOver(user.suspensionEnd)) {
+          await userAuthUtils.unsuspendUser(user.id);
+          await resetFailedLoginAttempts(user.id);
+        } else {
+          const err = new Error(
+            userAuthUtils.getSuspensionMessage(user.suspensionEnd)
+          );
+          err.status = 403;
+          return next(err);
+        }
+      }
 
-    if (await bcrypt.compare(password, user.password)) {
-      user.loginAttempts = 0;
+      await userAuthUtils.resetFailedLoginAttempts(user.id);
+
+      // Define updatedUser here
+      const updatedUser = await userAuthUtils.findUserByUsername(username);
+
       return res.status(200).json({
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        profilePicture: user.profilePicture,
-        token: generateJWT(user.id),
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        profilePicture: updatedUser.profilePicture,
+        token: userAuthUtils.generateJWT(updatedUser.id),
       });
     } else {
-      user.loginAttempts += 1;
-
-      if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-        user.isSuspended = true;
-        user.suspensionStarts = new Date();
-        user.suspensionEnds = new Date(
-          Date.now() + SUSPENSION_LENGTH_IN_MINUTES * 60 * 1000
+      const updatedUser = await userAuthUtils.handleFailedLoginAttempts(
+        user.id
+      );
+      if (updatedUser.failedLoginAttempts >= userAuthUtils.MAX_LOGIN_ATTEMPTS) {
+        const suspendedUser = await userAuthUtils.suspendUser(user.id);
+        const err = new Error(
+          userAuthUtils.getSuspensionMessage(suspendedUser.suspensionEnd)
         );
-
-        // Immediately show the suspension message
-        const err = new Error(getSuspensionMessage(user.suspensionEnds));
         err.status = 403;
         return next(err);
       }
 
+      const remainingAttempts =
+        userAuthUtils.MAX_LOGIN_ATTEMPTS - updatedUser.failedLoginAttempts;
       const err = new Error(
-        `Invalid credentials, you have ${
-          MAX_LOGIN_ATTEMPTS - user.loginAttempts
-        } remaining attempt(s)`
+        `Invalid credentials, you have ${remainingAttempts} remaining attempt(s)`
       );
-      err.status = 401;
+      err.status = 403;
       return next(err);
     }
   } catch (err) {
@@ -428,71 +403,53 @@ export const asyncApproveUser = async (req, res, next) => {
   */
   const { id } = req.params;
 
-  const user = await prisma.user.findUnique({
-    where: {
-      id: parseInt(id),
-    },
-  });
+  try {
+    const user = await userAuthUtils.findUserById(parseInt(id));
 
-  if (!user) {
-    const err = new Error("Account not found");
-    err.status = 404;
-    return next(err);
-  }
+    if (!user) {
+      const err = new Error("Account not found");
+      err.status = 404;
+      return next(err);
+    }
 
-  if (user.isActive) {
-    return res.status(400).send("This account has already been approved");
-  }
+    if (user.isActive) {
+      return res
+        .status(400)
+        .json({ message: "This account has already been approved" });
+    }
 
-  const accessRequest = await prisma.accessRequest.findFirst({
-    where: {
-      userId: parseInt(id),
-      statusId: 1,
-    },
-  });
+    const pendingAccessRequest =
+      await userAuthUtils.findUserPendingAccessRequest(parseInt(id));
 
-  if (!accessRequest) {
-    return res.status(400).send("Access request not found");
-  }
+    if (!pendingAccessRequest) {
+      const err = new Error("No pending access requests for this user");
+      err.status = 404;
+      return next(err);
+    }
 
-  await prisma.accessRequest.update({
-    where: {
-      id: accessRequest.id,
-    },
-    data: {
-      statusId: 2,
-    },
-  });
+    await userAuthUtils.approveUserAccessRequest(parseInt(id));
 
-  await prisma.user.update({
-    where: {
-      id: parseInt(id),
-    },
-    data: {
-      isActive: true,
-    },
-  });
-
-  const loginLink = `${process.env.BASE_URL}/api/auth/login`;
-  const emailText = `
+    const loginLink = `${process.env.BASE_URL}/api/auth/login`;
+    const emailText = `
   Your account has been approved. Your username is ${user.username}
 
   Click the link below to login:
   - Login: ${loginLink}
   `;
 
-  try {
-    await asyncSendEmail({
+    await userAuthUtils.sendEmail({
       to: user.email,
       subject: "Account approved",
       text: emailText,
     });
+
+    return res.status(200).send(`User approved, email sent to ${user.email}`);
   } catch (err) {
     console.error(err);
-    return res.status(500).send("Error sending email");
+    const error = new Error("Server error, please try again later");
+    error.status = 500;
+    return next(error);
   }
-
-  return res.send(`User approved, email sent to ${user.email}`);
 };
 
 export const asyncRejectUser = async (req, res, next) => {
