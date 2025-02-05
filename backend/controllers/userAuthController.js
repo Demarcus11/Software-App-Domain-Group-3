@@ -1,4 +1,5 @@
 import prisma from "../config/prismaClient.js";
+import { getErrorMessage } from "../config/prismaClient.js";
 import { Prisma } from "@prisma/client";
 import userAuthUtils from "../utils/userAuthUtils.js";
 import crypto from "crypto";
@@ -25,21 +26,33 @@ export const asyncRegisterUser = async (req, res, next) => {
     address,
     dateOfBirth,
     roleId,
-    profilePicture,
-    securityQuestion,
+    securityQuestions,
   } = req.body;
 
   try {
-    const securityQuestionExists = await prisma.securityQuestion.findFirst({
-      where: { id: securityQuestion.id },
-    });
+    const questionIds = securityQuestions.map(({ questionId }) => questionId);
+    const unqiueQuestionIds = new Set(questionIds);
 
-    if (!securityQuestionExists) {
-      const err = new Error(
-        `Security question with id ${securityQuestion.id} not found`
-      );
-      err.status = 404;
+    if (unqiueQuestionIds.size !== questionIds.length) {
+      const { message, httpStatusCode } = await getErrorMessage("17", {});
+      const err = new Error(message);
+      err.status = httpStatusCode;
       return next(err);
+    }
+
+    for (const { questionId } of securityQuestions) {
+      const securityQuestionExists = await prisma.securityQuestion.findFirst({
+        where: { id: questionId },
+      });
+
+      if (!securityQuestionExists) {
+        const { message, httpStatusCode } = await getErrorMessage("1", {
+          securityQuestionId: questionId,
+        });
+        const err = new Error(message);
+        err.status = httpStatusCode;
+        return next(err);
+      }
     }
 
     const roleExists = await prisma.role.findFirst({
@@ -47,16 +60,19 @@ export const asyncRegisterUser = async (req, res, next) => {
     });
 
     if (!roleExists) {
-      const err = new Error(`Role with id ${roleId} not found`);
-      err.status = 404;
+      const { message, httpStatusCode } = await getErrorMessage("2", {
+        roleId,
+      });
+      const err = new Error(message);
+      err.status = httpStatusCode;
       return next(err);
     }
 
     const hashedPassword = await userAuthUtils.hashPassword(password);
-    const hashedSecurityQuestionAnswer = await userAuthUtils.hashSecurityAnswer(
-      securityQuestion.answer
-    );
+
     const username = userAuthUtils.generateUsername({ firstName, lastName });
+
+    const profilePicturePath = req.file ? req.file.path : null;
 
     const user = await prisma.user.create({
       data: {
@@ -67,12 +83,25 @@ export const asyncRegisterUser = async (req, res, next) => {
         address,
         dateOfBirth,
         roleId,
-        profilePicture,
+        profilePicture: profilePicturePath,
         username,
-        securityQuestionId: securityQuestion.id,
-        securityAnswer: hashedSecurityQuestionAnswer,
       },
     });
+
+    userAuthUtils.generateJWT(user.id);
+
+    for (const { questionId, answer } of securityQuestions) {
+      const hashedAnswer = await userAuthUtils.hashSecurityAnswer(
+        answer.toLowerCase()
+      );
+      await prisma.userSecurityQuestion.create({
+        data: {
+          userId: user.id,
+          securityQuestionId: questionId,
+          answer: hashedAnswer,
+        },
+      });
+    }
 
     await prisma.accessRequest.create({
       data: {
@@ -82,6 +111,14 @@ export const asyncRegisterUser = async (req, res, next) => {
         email,
         address,
         dateOfBirth,
+      },
+    });
+
+    await prisma.passwordHistory.create({
+      data: {
+        oldPassword: hashedPassword,
+        isExpired: false,
+        userId: user.id,
       },
     });
 
@@ -111,7 +148,7 @@ export const asyncRegisterUser = async (req, res, next) => {
     });
 
     res.status(200).json({
-      msg: "Email sent to admin for approval, check your email for updates",
+      msg: "Email sent to admin at ksuappdomainmanager@gmail.com for approval, please wait for approval",
     });
   } catch (err) {
     if (
@@ -119,15 +156,17 @@ export const asyncRegisterUser = async (req, res, next) => {
       err.code === "P2002"
     ) {
       if (err.meta.target.includes("email")) {
-        return res.status(400).json({
-          message: "Email is already in use. Please try another one",
-        });
+        const { message, httpStatusCode } = await getErrorMessage("3", {});
+        const err = new Error(message);
+        err.status = httpStatusCode;
+        return next(err);
       }
     }
 
     console.error(err);
-    const error = new Error("Server error, please try again later");
-    error.status = 500;
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
     return next(error);
   }
 };
@@ -142,29 +181,32 @@ export const asyncLoginUser = async (req, res, next) => {
   - server sends users data and generated token to the client
   - client uses token to access protected routes
   */
+
+  // TODO: fix invalid attempt logic to show even when username is not found
   const { username, password } = req.body;
 
   try {
     const user = await userAuthUtils.findUserByUsername(username);
 
     if (!user) {
-      const err = new Error("Account not found");
-      err.status = 404;
+      const { message, httpStatusCode } = await getErrorMessage("5", {});
+      const err = new Error(message);
+      err.status = httpStatusCode;
       return next(err);
     }
 
     if (userAuthUtils.isPasswordExpired(user)) {
       await expirePassword(user.id);
-      const err = new Error(
-        "Your password has expired. Please reset your password"
-      );
-      err.status = 403;
+      const { message, httpStatusCode } = await getErrorMessage("6", {});
+      const err = new Error(message);
+      err.status = httpStatusCode;
       return next(err);
     }
 
     if (!user.isActive) {
-      const err = new Error("This account is not active");
-      err.status = 403;
+      const { message, httpStatusCode } = await getErrorMessage("7", {});
+      const err = new Error(message);
+      err.status = httpStatusCode;
       return next(err);
     }
 
@@ -186,13 +228,15 @@ export const asyncLoginUser = async (req, res, next) => {
 
       const updatedUser = await userAuthUtils.findUserByUsername(username);
 
+      const token = userAuthUtils.generateJWT(updatedUser.id);
+
       return res.status(200).json({
         id: updatedUser.id,
         username: updatedUser.username,
         email: updatedUser.email,
-        role: updatedUser.role,
+        roleId: updatedUser.roleId,
         profilePicture: updatedUser.profilePicture,
-        token: userAuthUtils.generateJWT(updatedUser.id),
+        token,
       });
     } else {
       const updatedUser = await userAuthUtils.handleFailedLoginAttempts(
@@ -209,16 +253,18 @@ export const asyncLoginUser = async (req, res, next) => {
 
       const remainingAttempts =
         userAuthUtils.MAX_LOGIN_ATTEMPTS - updatedUser.failedLoginAttempts;
-      const err = new Error(
-        `Invalid credentials, you have ${remainingAttempts} remaining attempt(s)`
-      );
-      err.status = 403;
+      const { message, httpStatusCode } = await getErrorMessage("8", {
+        remainingAttempts,
+      });
+      const err = new Error(message);
+      err.status = httpStatusCode;
       return next(err);
     }
   } catch (err) {
     console.error(err);
-    const error = new Error("Server error, please try again later");
-    error.status = 500;
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
     return next(error);
   }
 };
@@ -228,21 +274,22 @@ export const asyncLoginUser = async (req, res, next) => {
    @access    Public
 */
 export const asyncForgotPassword = async (req, res, next) => {
-  const { username, securityAnswer } = req.body;
+  const { username, email } = req.body;
 
   try {
-    const user = await userAuthUtils.findUserByUsername(username);
+    const user = await userAuthUtils.findUserByUsernameAndEmail({
+      username,
+      email,
+    });
 
     if (!user) {
-      const err = new Error("Account not found");
-      err.status = 404;
-      return next(err);
+      const { message, httpStatusCode } = await getErrorMessage("5", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
-    if (!userAuthUtils.isSecurityAnswerValid(user, securityAnswer)) {
-      const err = new Error("Incorrect security question answer");
-      err.status = 401;
-      return next(err);
-    }
+
+    await userAuthUtils.resetUserResetToken(user.id);
 
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetTokenExpiry = new Date(Date.now() + 1000 * 60 * 10); // 10 minutes
@@ -253,22 +300,14 @@ export const asyncForgotPassword = async (req, res, next) => {
       resetTokenExpiry,
     });
 
-    const resetLink = `${process.env.BASE_URL}/api/auth/reset-password?token=${resetToken}`;
-    const emailText = `
-  Password reset link: ${resetLink}
-  `;
-
-    await userAuthUtils.sendEmail({
-      to: user.email,
-      subject: "Password reset",
-      text: emailText,
+    res.status(200).json({
+      resetToken,
     });
-
-    res.status(200).json({ msg: "Password reset link sent to your email" });
   } catch (err) {
     console.error(err);
-    const error = new Error("Server error, please try again later");
-    error.status = 500;
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
     return next(error);
   }
 };
@@ -279,27 +318,25 @@ export const asyncForgotPassword = async (req, res, next) => {
 */
 export const asyncResetPassword = async (req, res, next) => {
   const { token } = req.query;
-  const { newPassword } = req.body;
+  const { password } = req.body;
 
   try {
-    const user = await prisma.user.findUnique({
-      where: {
-        passwordResetToken: token,
-      },
-      include: {
-        passwordHistory: true,
-      },
-    });
+    const user = await userAuthUtils.findUserByResetToken(token);
 
-    if (!user) {
-      const err = new Error("Invalid or expired password reset token");
-      err.status = 400;
-      return next(err);
+    if (!user || user.passwordResetTokenExpiry < new Date()) {
+      const { message, httpStatusCode } = await getErrorMessage("10", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
+    const passwords = await prisma.passwordHistory.findMany({
+      where: { userId: user.id },
+    });
+
     const passwordUsedBefore = await Promise.all(
-      user.passwordHistory.map(async (entry) => {
-        const match = await bcrypt.compare(newPassword, entry.oldPassword);
+      passwords.map(async (entry) => {
+        const match = await bcrypt.compare(password, entry.oldPassword);
         return match;
       })
     );
@@ -307,20 +344,22 @@ export const asyncResetPassword = async (req, res, next) => {
     const passwordUsedBeforeMatch = passwordUsedBefore.some((match) => match);
 
     if (passwordUsedBeforeMatch) {
-      const err = new Error("Cannot use previously used passwords");
-      err.status = 400;
-      return next(err);
+      const { message, httpStatusCode } = await getErrorMessage("11", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
-    if (user.passwordHistory.length > 0) {
-      const lastEntry = user.passwordHistory[user.passwordHistory.length - 1];
+    if (passwords.length > 0) {
+      const lastEntry = passwords[passwords.length - 1];
       await prisma.passwordHistory.update({
         where: { id: lastEntry.id },
         data: { isExpired: true },
       });
     }
 
-    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    const hashedNewPassword = await bcrypt.hash(password, 10);
+
     await prisma.passwordHistory.create({
       data: {
         oldPassword: hashedNewPassword,
@@ -342,8 +381,9 @@ export const asyncResetPassword = async (req, res, next) => {
     res.status(200).json({ msg: "Password has been reset" });
   } catch (err) {
     console.error(err);
-    const error = new Error("Server error, please try again later");
-    error.status = 500;
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
     return next(error);
   }
 };
@@ -361,32 +401,35 @@ export const asyncApproveUser = async (req, res, next) => {
   const { id } = req.params;
 
   try {
-    const user = await userAuthUtils.findUserById(parseInt(id));
+    const user = await userAuthUtils.findUserById(id);
 
     if (!user) {
-      const err = new Error("Account not found");
-      err.status = 404;
-      return next(err);
+      const { message, httpStatusCode } = await getErrorMessage("5", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
     if (user.isActive) {
-      return res
-        .status(400)
-        .json({ message: "This account has already been approved" });
+      const { message, httpStatusCode } = await getErrorMessage("12", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
     const pendingAccessRequest =
-      await userAuthUtils.findUserPendingAccessRequest(parseInt(id));
+      await userAuthUtils.findUserPendingAccessRequest(id);
 
     if (!pendingAccessRequest) {
-      const err = new Error("No pending access requests for this user");
-      err.status = 404;
-      return next(err);
+      const { message, httpStatusCode } = await getErrorMessage("13", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
-    await userAuthUtils.approveUserAccessRequest(parseInt(id));
+    await userAuthUtils.approveUserAccessRequest(id);
 
-    const loginLink = `${process.env.BASE_URL}/api/auth/login`;
+    const loginLink = `${process.env.BASE_URL}/login`;
     const emailText = `
   Your account has been approved. Your username is ${user.username}
 
@@ -403,8 +446,9 @@ export const asyncApproveUser = async (req, res, next) => {
     return res.status(200).send(`User approved, email sent to ${user.email}`);
   } catch (err) {
     console.error(err);
-    const error = new Error("Server error, please try again later");
-    error.status = 500;
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
     return next(error);
   }
 };
@@ -413,30 +457,33 @@ export const asyncRejectUser = async (req, res, next) => {
   const { id } = req.params;
 
   try {
-    const user = await userAuthUtils.findUserById(parseInt(id));
+    const user = await userAuthUtils.findUserById(id);
 
     if (!user) {
-      const err = new Error("Account not found");
-      err.status = 404;
-      return next(err);
+      const { message, httpStatusCode } = await getErrorMessage("5", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
     if (user.isActive) {
-      return res
-        .status(400)
-        .json({ message: "This account has already been rejected" });
+      const { message, httpStatusCode } = await getErrorMessage("14", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
     const pendingAccessRequest =
-      await userAuthUtils.findUserPendingAccessRequest(parseInt(id));
+      await userAuthUtils.findUserPendingAccessRequest(id);
 
     if (!pendingAccessRequest) {
-      const err = new Error("No pending access requests for this user");
-      err.status = 404;
-      return next(err);
+      const { message, httpStatusCode } = await getErrorMessage("13", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
     }
 
-    await userAuthUtils.rejectUserAccessRequest(parseInt(id));
+    await userAuthUtils.rejectUserAccessRequest(id);
 
     const emailText = `Your account has been rejected.`;
 
@@ -449,8 +496,101 @@ export const asyncRejectUser = async (req, res, next) => {
     return res.status(200).send(`User rejected, email sent to ${user.email}`);
   } catch (err) {
     console.error(err);
-    const error = new Error("Server error, please try again later");
-    error.status = 500;
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
+    return next(error);
+  }
+};
+
+/* @desc      Get all security questions
+   @endpoint  GET /auth/security-questions
+   @access    Public
+*/
+export const asyncGetAllSecurityQuestions = async (req, res, next) => {
+  try {
+    const securityQuestions = await prisma.securityQuestion.findMany();
+
+    if (securityQuestions.length === 0) {
+      const { message, httpStatusCode } = await getErrorMessage("15", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
+    }
+
+    res.status(200).json(securityQuestions);
+  } catch (err) {
+    console.error(err);
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
+    return next(error);
+  }
+};
+
+/* @desc      Get all roles
+   @endpoint  GET /auth/roles
+   @access    Public
+*/
+export const asyncGetAllRoles = async (req, res, next) => {
+  try {
+    const roles = await prisma.role.findMany();
+
+    if (roles.length === 0) {
+      const { message, httpStatusCode } = await getErrorMessage("16", {});
+      const error = new Error(message);
+      error.status = httpStatusCode;
+      return next(error);
+    }
+
+    res.status(200).json(roles);
+  } catch (err) {
+    console.error(err);
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
+    return next(error);
+  }
+};
+
+/* @desc      Get a user's security question
+   @endpoint  GET /auth/security-question
+   @access    Public
+*/
+export const asyncGetSecurityQuestion = async (req, res, next) => {
+  const { username } = req.body;
+
+  try {
+    const user = await prisma.user.findFirst({
+      where: { username },
+    });
+
+    if (!user) {
+      const { message, httpStatusCode } = await getErrorMessage("5", {});
+      const err = new Error(message);
+      err.status = httpStatusCode;
+      return next(err);
+    }
+
+    const securityQuestion = await prisma.securityQuestion.findFirst({
+      where: { id: user.securityQuestionId },
+    });
+
+    if (!securityQuestion) {
+      const { message, httpStatusCode } = await getErrorMessage("1", {
+        securityQuestionId: user.securityQuestionId,
+      });
+      const err = new Error(message);
+      err.status = httpStatusCode;
+      return next(err);
+    }
+
+    res.status(200).json(securityQuestion);
+  } catch (err) {
+    console.error(err);
+    const { message, httpStatusCode } = await getErrorMessage("4", {});
+    const error = new Error(message);
+    error.status = httpStatusCode;
     return next(error);
   }
 };
@@ -462,4 +602,7 @@ export default {
   asyncResetPassword,
   asyncApproveUser,
   asyncRejectUser,
+  asyncGetAllSecurityQuestions,
+  asyncGetAllRoles,
+  asyncGetSecurityQuestion,
 };

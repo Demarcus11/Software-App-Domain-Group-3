@@ -1,15 +1,40 @@
-const validateRequest = (schema) => (req, res, next) => {
-  const result = schema.safeParse(req.body);
+const validateRequest = (schema) => async (req, res, next) => {
+  try {
+    // Validate the request body
+    const result = schema.safeParse(req.body);
 
-  if (!result.success) {
-    const errors = result.error.errors.map((error) => ({
-      path: error.path.join("."),
-      message: error.message,
-    }));
+    if (!result.success) {
+      // If validation fails, clean up the uploaded file
+      if (req.cleanupFile) {
+        req.cleanupFile();
+      }
 
-    return res.status(400).json({ error: true, errors });
+      // Format validation errors
+      const errors = result.error.errors.map((error) => ({
+        path: error.path.join("."),
+        message: error.message,
+      }));
+
+      // Return validation errors
+      return res.status(400).json({ error: true, errors });
+    }
+
+    // If validation succeeds, proceed to the next middleware
+    next();
+  } catch (err) {
+    console.error("Validation middleware error:", err);
+
+    // If an unexpected error occurs, clean up the uploaded file
+    if (req.cleanupFile) {
+      req.cleanupFile();
+    }
+
+    // Return a generic error response
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error during validation",
+    });
   }
-  next();
 };
 
 export default validateRequest;

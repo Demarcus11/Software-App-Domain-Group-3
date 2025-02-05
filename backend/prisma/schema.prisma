@@ -14,77 +14,95 @@ datasource db {
 }
 
 model User {
-  id        Int @id @default(autoincrement())
-  email     String @unique
-  username  String @db.VarChar(30)
-  password  String
-  roleId    Int @default(1)
-  passwordResetToken String? @unique
-  passwordResetTokenExpiry DateTime?
-  firstName String
-  lastName String
-  dateOfBirth DateTime
-  address String
-  profilePicture String?
-  isActive Boolean @default(false)
-  isSuspended Boolean @default(false)
-  suspensionStart DateTime?
-  suspensionEnd DateTime?
-  failedLoginAttempts Int @default(0)
-  lastPasswordChangeAt DateTime @default(now())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  securityQuestionId Int
-  securityAnswer String
+  id                        String              @id @default(cuid()) @unique
+  email                     String              @unique
+  username                  String              @db.VarChar(30)
+  password                  String
+  roleId                    String              @default("1")
+  passwordResetToken        String?             @unique
+  passwordResetTokenExpiry  DateTime?
+  firstName                 String
+  lastName                  String
+  dateOfBirth               String
+  address                   String
+  profilePicture            String?
+  isActive                  Boolean             @default(false)
+  isSuspended               Boolean             @default(false)
+  suspensionStart           DateTime?
+  suspensionEnd             DateTime?
+  failedLoginAttempts       Int                 @default(0)
+  lastPasswordChangeAt      DateTime            @default(now())
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
 
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  securityQuestion SecurityQuestion? @relation(fields: [securityQuestionId], references: [id], onDelete: Cascade)
-  passwordHistory PasswordHistory[]
-  accessRequests AccessRequest[]
+  role                      Role                @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  securityQuestions         UserSecurityQuestion[]
+  passwordHistory           PasswordHistory[]
+  accessRequests            AccessRequest[]
 }
 
 model SecurityQuestion {
-  id Int @id @default(autoincrement())
-  question String @unique
-  
-  users User[]
+  id                        String              @id @default(cuid()) @unique
+  question                  String              @unique
+
+  userSecurityQuestions     UserSecurityQuestion[]
+}
+
+model UserSecurityQuestion {
+  id                        String              @id @default(cuid()) @unique
+  userId                    String
+  securityQuestionId        String
+  answer                    String
+
+  user                      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  securityQuestion          SecurityQuestion    @relation(fields: [securityQuestionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, securityQuestionId]) // Ensure a user can't have the same question multiple times
 }
 
 model PasswordHistory {
-  id Int @id @default(autoincrement())
-  userId Int 
-  oldPassword String 
-  createdAt DateTime @default(now())
-  isExpired Boolean @default(false)
+  id           String   @id @default(cuid()) @unique
+  userId       String   // Change to String to match User's `id` type
+  oldPassword  String
+  createdAt    DateTime @default(now())
+  isExpired    Boolean  @default(false)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade) 
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model AccessRequest {
-  id Int @id @default(autoincrement())
-  firstName String  
-  lastName String 
-  email String 
-  address String 
-  dateOfBirth DateTime 
-  statusId Int @default(1)
-  createdAt DateTime @default(now())
-  userId Int
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status Status @relation(fields: [statusId], references: [id], onDelete: Cascade)
+model AccessRequest {
+  id          String   @id @default(cuid()) @unique
+  firstName   String
+  lastName    String
+  email       String
+  address     String
+  dateOfBirth String
+  statusId    Int   @default(1)  
+  createdAt   DateTime @default(now())
+  userId      String  
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status      Status   @relation(fields: [statusId], references: [id], onDelete: Cascade)
 }
 
 model Role {
-  id Int @id @default(autoincrement())
+  id   String @id @default(cuid()) @unique
   name String @unique
 
   user User[]
 }
 
 model Status {
-  id Int @id @default(autoincrement())
+  id   Int @id @default(autoincrement())
   name String @unique
 
   accessRequests AccessRequest[]
+}
+
+model ErrorMessage {
+  id          String @id @default(cuid()) @unique
+  errorCode   String @unique
+  errorMessage String
+  httpStatusCode Int
 }

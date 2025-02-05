@@ -15,6 +15,15 @@ export const findUserByUsername = async (username) => {
   });
 };
 
+export const findUserByUsernameAndEmail = async ({ username, email }) => {
+  return await prisma.user.findFirst({
+    where: {
+      username,
+      email,
+    },
+  });
+};
+
 export const findUserById = async (userId) => {
   return await prisma.user.findUnique({
     where: {
@@ -126,7 +135,7 @@ export const sendEmail = async ({ text, subject, to }) => {
 };
 
 export const generateJWT = (id) => {
-  return jwt.sign({ id }, process.env.TOKEN_SECRET, {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: "30d",
   });
 };
@@ -206,6 +215,26 @@ export const rejectUserAccessRequest = async (userId) => {
   });
 };
 
+export const resetUserResetToken = async (userId) => {
+  return await prisma.user.update({
+    where: {
+      id: userId,
+    },
+    data: {
+      passwordResetToken: null,
+      passwordResetTokenExpiry: null,
+    },
+  });
+};
+
+export const findUserByResetToken = async (passwordResetToken) => {
+  return await prisma.user.findUnique({
+    where: {
+      passwordResetToken,
+    },
+  });
+};
+
 export const updateUserResetToken = async ({
   userId,
   resetToken,
@@ -257,5 +286,8 @@ export default {
   isSecurityAnswerValid,
   updateUserResetToken,
   findUserByToken,
+  findUserByUsernameAndEmail,
+  findUserByResetToken,
+  resetUserResetToken,
   MAX_LOGIN_ATTEMPTS,
 };
